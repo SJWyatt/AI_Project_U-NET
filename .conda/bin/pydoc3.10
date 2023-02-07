@@ -1,5 +1,0 @@
-#!/mnt/c/Users/zachc/Projects/AI_Project_U-NET/.conda/bin/python3.10
-
-import pydoc
-if __name__ == '__main__':
-    pydoc.cli()
