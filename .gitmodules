@@ -1,3 +1,0 @@
-[submodule "Pytorch-UNet"]
-	path = Pytorch-UNet
-	url = https://github.com/milesial/Pytorch-UNet.git
