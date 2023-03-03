@@ -18,11 +18,6 @@ class IrcadDataloader(LightningDataModule):
 
         self.labels = []
 
-        # self.ct_scans = {}
-        # self.masks = {}
-        # self.labels = []
-        # self.index_mapping = {}
-
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.shuffle = shuffle
@@ -246,4 +241,18 @@ if __name__ == "__main__":
 
     from pprint import pprint
     print("First item:")
-    pprint(dataset[0])
+    batch = dataset[0]
+    ct_scan:torch.Tensor = batch["ct_scan"]
+    masks = batch["masks"]
+    metadata = batch["metadata"]
+
+    print(f"CT scan shape: {ct_scan.shape}")
+    print(f"CT scan max  : {ct_scan.max()}")
+    print(f"CT scan min  : {ct_scan.min()}")
+    for i, mask in enumerate(masks):
+        print(f"Mask ({dataset.labels[i]}) shape: {mask.shape}")
+        print(f"Mask ({dataset.labels[i]}) max  : {mask.max()}")
+        print(f"Mask ({dataset.labels[i]}) min  : {mask.min()}")
+    print("Metadata:", end=" ")
+    pprint(metadata)
+
