@@ -43,40 +43,46 @@ class UNetTrainer(pl.LightningModule):
         return self.model(x)
 
     def training_step(self, batch, batch_idx):
-        inputs = batch["ct_scan"]
+        inputs = batch["ct_scan"].unsqueeze(1)
         masks = batch["masks"]
-
-        # Convert separate masks into a single mask with each class as a channel.
-        # masks = torch.stack([masks == i for i in range(self.num_classes)], dim=1).float()
-        masks = torch.stack(masks, dim=1).float()
 
         outs = self(inputs)
         
-        loss = F.cross_entropy(outs, masks)
-        # Also use dice loss for better segmentation.
-        loss += dice_loss(outs, masks)
+        loss_ce = F.cross_entropy(outs, masks)
 
+        # TODO: Also use dice loss to improve segmentation.
+        # loss_dice = dice_loss(
+        #     F.softmax(outs, dim=1).float(), 
+        #     masks.permute(0, 3, 1, 2).float()
+        # )
+
+        loss = loss_ce# + loss_dice
         self.log('train_loss', loss)
+        # self.log('train_ce_loss', loss_ce)
+        # self.log('train_dice_loss', loss_dice)
 
         return loss
 
     def validation_step(self, batch, batch_idx):
-        inputs = batch["ct_scan"]
-        masks = batch["masks"]
-
-        # Convert separate masks into a single mask with each class as a channel.
-        masks = torch.stack(masks, dim=1).float()
-
+        inputs:Tensor = batch["ct_scan"].unsqueeze(1)
+        masks:Tensor = batch["masks"]
+        
         outs = self(inputs)
 
-        loss = F.cross_entropy(outs, masks)
-        # Also use dice loss for better segmentation.
-        loss += dice_loss(outs, inputs)
+        loss_ce = F.cross_entropy(outs, masks)
 
+        # TODO: Also use dice loss to improve segmentation.
+        # loss_dice = dice_loss(
+        #     F.softmax(outs, dim=1).float(), 
+        #     masks.permute(0, 3, 1, 2).float()
+        # )
+
+        loss = loss_ce # + loss_dice
         self.log('val_loss', loss)
+        # self.log('val_ce_loss', loss_ce)
+        # self.log('val_dice_loss', loss_dice)
 
         return loss
 
 if __name__ == "__main__":
     cli = LightningCLI(UNetTrainer, IrcadDataloader)
-
