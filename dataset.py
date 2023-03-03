@@ -1,4 +1,5 @@
 from pathlib import Path
+from datetime import datetime
 
 import pydicom
 import torch
@@ -83,21 +84,27 @@ class IrcadDataloader(LightningDataModule):
         ct_scans = []
         for ct_scan_path in sorted((patient_path / "PATIENT_DICOM").iterdir()):
             if ct_scan_path.is_file():
-                ct_scan = pydicom.read_file(ct_scan_path)
-
+                # TODO: Load the CT scan only in the dataset __getitem__ method.
+                # ct_scan = pydicom.read_file(ct_scan_path)
+                # ct_scans.append({
+                #     "pixel_data": ct_scan.pixel_array,
+                #     "metadata": {
+                #         "image_name": ct_scan_path.name,
+                #         "study_date": ct_scan.StudyDate,
+                #         "study_time": ct_scan.StudyTime,
+                #         "gender": ct_scan.PatientSex,
+                #         "pixel_spacing": ct_scan.PixelSpacing,
+                #         "slice_thickness": ct_scan.SliceThickness,
+                #         "image_number": ct_scan.InstanceNumber,
+                #         "image_position": ct_scan.ImagePositionPatient,
+                #         "image_orientation": ct_scan.ImageOrientationPatient,
+                #     }
+                # })
                 ct_scans.append({
-                    "pixel_data": ct_scan.pixel_array,
-                    "metadata": {
-                        "image_name": ct_scan_path.name,
-                        "study_date": ct_scan.StudyDate,
-                        "study_time": ct_scan.StudyTime,
-                        "gender": ct_scan.PatientSex,
-                        "pixel_spacing": ct_scan.PixelSpacing,
-                        "slice_thickness": ct_scan.SliceThickness,
-                        "image_number": ct_scan.InstanceNumber,
-                        "image_position": ct_scan.ImagePositionPatient,
-                        "image_orientation": ct_scan.ImageOrientationPatient,
-                    }
+                    "image_name": ct_scan_path.name,
+                    "ct_scan_path": ct_scan_path,
+                    "pixel_data": [],
+                    "metadata": {}
                 })
 
         return ct_scans
@@ -113,14 +120,19 @@ class IrcadDataloader(LightningDataModule):
             for organ_path in sorted(mask_path.iterdir()):
                 if organ_path.is_file():
                     image_name = organ_path.name
-                    mask_data = pydicom.read_file(organ_path)
-
+                    
                     # Get the name of the ct scan.
                     if image_name not in masks.keys():
                         masks[image_name] = {}
                     assert organ_name not in masks[image_name], f"Duplicate organ: {organ_name} for {image_name} of patient {patient_id}"
 
-                    masks[image_name][organ_name] = mask_data.pixel_array
+                    # TODO: Load the mask only in the dataset __getitem__ method.
+                    # mask_data = pydicom.read_file(organ_path)
+                    # masks[image_name][organ_name] = mask_data.pixel_array
+                    masks[image_name][organ_name] = {
+                        "mask_path": organ_path,
+                        "mask_data": []
+                    }
 
             if organ_name not in self.labels:
                 self.labels.append(organ_name)
@@ -206,6 +218,28 @@ class Ircadb3D(torch.utils.data.Dataset):
         ct_scan_index = (index - idx) + (len(self.ct_scans[patient_id]))
         assert ct_scan_index >= 0 and ct_scan_index < len(self.ct_scans[patient_id]), f"Invalid ct scan index: {ct_scan_index} for patient {patient_id}"
 
+        # Load the ct scan from the filesystem (if not already loaded).
+        if len(self.ct_scans[patient_id][ct_scan_index]["pixel_data"]) == 0:
+            ct_scan_path:Path = self.ct_scans[patient_id][ct_scan_index]["ct_scan_path"]
+            ct_scan = pydicom.read_file(ct_scan_path)
+            self.ct_scans[patient_id][ct_scan_index]["pixel_data"] = ct_scan.pixel_array
+
+            # Convert the study date to a datetime object.
+            study_date = datetime.strptime(ct_scan.StudyDate, "%Y%m%d")
+            study_time = datetime.strptime(ct_scan.StudyTime, "%H%M%S")
+
+            # Save the metadata for this ct scan.
+            self.ct_scans[patient_id][ct_scan_index]["metadata"].update({
+                "image_name": ct_scan_path.name,
+                "study_datetime": datetime.combine(study_date, study_time.time()).isoformat(),
+                "gender": ct_scan.PatientSex,
+                "pixel_spacing": ct_scan.PixelSpacing,
+                "slice_thickness": float(ct_scan.SliceThickness),
+                "image_number": int(ct_scan.InstanceNumber),
+                "image_position": ct_scan.ImagePositionPatient,
+                "image_orientation": ct_scan.ImageOrientationPatient,
+            })
+
         # Get the metadata for the ct scan.
         metadata = self.ct_scans[patient_id][ct_scan_index]["metadata"]
         image_name = metadata["image_name"]
@@ -217,15 +251,22 @@ class Ircadb3D(torch.utils.data.Dataset):
         masks = []
         for organ_name in self.labels:
             if organ_name in self.masks[patient_id][image_name]:
+                # Check if the mask is already loaded.
+                if len(self.masks[patient_id][image_name][organ_name]["mask_data"]) == 0:
+                    # Load the mask from the filesystem.
+                    mask_path:Path = self.masks[patient_id][image_name][organ_name]["mask_path"]
+                    mask = pydicom.read_file(mask_path)
+                    self.masks[patient_id][image_name][organ_name]["mask_data"] = mask.pixel_array
+
                 # Load the mask for the organ.
-                masks.append(torch.tensor(self.masks[patient_id][image_name][organ_name]))
+                masks.append(torch.tensor(self.masks[patient_id][image_name][organ_name]["mask_data"]))
             else:
                 # If the mask doesn't exist, create an empty mask.
                 masks.append(torch.zeros_like(ct_scan))
 
         return {
-            "ct_scan": ct_scan,
-            "masks": masks,
+            "ct_scan": ct_scan.float(),
+            "masks": torch.stack(masks, dim=0).float(),
             "metadata": metadata,
         }
 
@@ -243,16 +284,19 @@ if __name__ == "__main__":
     print("First item:")
     batch = dataset[0]
     ct_scan:torch.Tensor = batch["ct_scan"]
-    masks = batch["masks"]
+    masks:torch.Tensor = batch["masks"]
     metadata = batch["metadata"]
 
     print(f"CT scan shape: {ct_scan.shape}")
     print(f"CT scan max  : {ct_scan.max()}")
     print(f"CT scan min  : {ct_scan.min()}")
-    for i, mask in enumerate(masks):
-        print(f"Mask ({dataset.labels[i]}) shape: {mask.shape}")
-        print(f"Mask ({dataset.labels[i]}) max  : {mask.max()}")
-        print(f"Mask ({dataset.labels[i]}) min  : {mask.min()}")
+    print(f"Masks shape: {masks.shape}")
+    print(f"Masks max  : {masks.max()}")
+    print(f"Masks min  : {masks.min()}")
+    # for i, mask in enumerate(masks):
+    #     print(f"Mask ({dataset.labels[i]}) shape: {mask.shape}")
+    #     print(f"Mask ({dataset.labels[i]}) max  : {mask.max()}")
+    #     print(f"Mask ({dataset.labels[i]}) min  : {mask.min()}")
     print("Metadata:", end=" ")
     pprint(metadata)
 
