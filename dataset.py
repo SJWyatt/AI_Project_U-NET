@@ -1,9 +1,12 @@
 from pathlib import Path
 from datetime import datetime
+import collections
 
 import pydicom
 import torch
 from pytorch_lightning import LightningDataModule
+from torchvision import transforms
+import torchvision.transforms.functional as TF
 
 
 class IrcadDataloader(LightningDataModule):
@@ -12,7 +15,8 @@ class IrcadDataloader(LightningDataModule):
                  batch_size:int=1,
                  num_workers:int=0,
                  shuffle:bool=False,
-                 drop_last:bool=False
+                 drop_last:bool=False,
+                 persistent_workers:bool=True,
                 ):
         super().__init__()
         self.dataset_dir = dataset_dir
@@ -23,6 +27,7 @@ class IrcadDataloader(LightningDataModule):
         self.num_workers = num_workers
         self.shuffle = shuffle
         self.drop_last = drop_last
+        self.persistent_workers = persistent_workers
         
     def prepare_data(self):
         """
@@ -46,8 +51,11 @@ class IrcadDataloader(LightningDataModule):
         # Make sure the labels are sorted.
         self.labels.sort()
 
+        # Sort the patient id's
+        patient_keys = sorted(patients.keys())
+
         # Split in train, val, and test.
-        num_patients = len(patients.keys())
+        num_patients = len(patient_keys)
         num_val = max(int(num_patients * 0.1), 1)
         num_test = max(int(num_patients * 0.1), 1)
         num_train = num_patients - (num_val + num_test)
@@ -57,9 +65,9 @@ class IrcadDataloader(LightningDataModule):
         print(f"Number of patients in val set:   {num_val}")
         print(f"Number of patients in test set:  {num_test}")
 
-        val_patients = list(patients.keys())[:num_val]
-        test_patients = list(patients.keys())[num_val:num_val+num_test]
-        train_patients = list(patients.keys())[num_val+num_test:]
+        val_patients = list(patient_keys)[:num_val]
+        test_patients = list(patient_keys)[num_val:num_val+num_test]
+        train_patients = list(patient_keys)[num_val+num_test:]
 
         self.train_ds = Ircadb3D(
             labels=self.labels, 
@@ -186,7 +194,37 @@ class Ircadb3D(torch.utils.data.Dataset):
 
         self.index_mapping = {}
         self.create_index_mapping()
-            
+
+        self.transforms = transforms.Compose(
+            [
+                # transforms.RandomApply([
+                #     transforms.RandomChoice([
+                #         transforms.ColorJitter(),
+                #         transforms.ColorJitter(),
+                #         transforms.ColorJitter(),
+                #         transforms.ColorJitter(),
+                #     ], p=[0.25, 0.25, 0.25, 0.25]),
+                # ], p=0.25),
+                # transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
+                transforms.RandomApply([
+                    transforms.RandomChoice([
+                        transforms.GaussianBlur(kernel_size=3),
+                        transforms.GaussianBlur(kernel_size=5),
+                        transforms.GaussianBlur(kernel_size=7),
+                        transforms.GaussianBlur(kernel_size=9),
+                    ], p=[0.25, 0.25, 0.25, 0.25]),
+                ], p=0.25),
+                transforms.RandomApply([
+                    transforms.RandomChoice([
+                        transforms.RandomAdjustSharpness(sharpness_factor=0.5, p=1),
+                        transforms.RandomAdjustSharpness(sharpness_factor=1.5, p=1),
+                        transforms.RandomAdjustSharpness(sharpness_factor=2.5, p=1),
+                        transforms.RandomAdjustSharpness(sharpness_factor=3, p=1),
+                    ], p=[0.25, 0.25, 0.25, 0.25]),
+                ], p=0.25),
+            ]
+        )
+
     def create_index_mapping(self):
         for patient_id in sorted(self.ct_scans.keys()):
             # Use a mapping to get the correct patient from an index.
@@ -259,16 +297,45 @@ class Ircadb3D(torch.utils.data.Dataset):
                     self.masks[patient_id][image_name][organ_name]["mask_data"] = mask.pixel_array
 
                 # Load the mask for the organ.
-                masks.append(torch.tensor(self.masks[patient_id][image_name][organ_name]["mask_data"]))
+                mask = torch.tensor(self.masks[patient_id][image_name][organ_name]["mask_data"])
+                mask = (mask > 0.5).float()
+                
+                masks.append(mask)
             else:
                 # If the mask doesn't exist, create an empty mask.
                 masks.append(torch.zeros_like(ct_scan))
+        masks = torch.stack(masks, dim=0).float()
+
+        # Normalize the ct_scan
+
+
+        ct_scan, masks = self.augment(ct_scan.unsqueeze(0), masks)
 
         return {
-            "ct_scan": ct_scan.float(),
-            "masks": torch.stack(masks, dim=0).float(),
+            "ct_scan": ct_scan.squeeze(),
+            "masks": masks,
             "metadata": metadata,
         }
+
+    def augment(self, ct_scan, masks):
+        ct_scan = self.transforms(ct_scan)
+
+        # Random rotation
+        # if torch.rand(1).item() > 0.5:
+        #     angle = torch.randint(low=-5, high=5, size=(1,)).item()
+        #     ct_scan = TF.rotate(ct_scan, angle)
+        #     masks = TF.rotate(masks, angle)
+
+        # Random Crop
+
+
+        # Random Shift
+
+
+        # Random vertical flip
+
+
+        return ct_scan, masks
 
 if __name__ == "__main__":
     # Test that the dataset loads correctly.
@@ -278,8 +345,10 @@ if __name__ == "__main__":
 
     # dataset = dataloader.train_dataloader()
     dataset = dataloader.train_ds
-    print(f"Dataset length: {len(dataset)}")
-
+    print(f"Train Dataset length   : {len(dataset)}")
+    print(f"Validate Dataset length: {len(dataloader.val_ds)}")
+    print(f"Test Dataset length    : {len(dataloader.test_ds)}")
+    
     from pprint import pprint
     print("First item:")
     batch = dataset[0]
@@ -287,9 +356,11 @@ if __name__ == "__main__":
     masks:torch.Tensor = batch["masks"]
     metadata = batch["metadata"]
 
+    print(f"CT scan dtype: {ct_scan.dtype}")
     print(f"CT scan shape: {ct_scan.shape}")
     print(f"CT scan max  : {ct_scan.max()}")
     print(f"CT scan min  : {ct_scan.min()}")
+    print(f"Masks dtype: {masks.dtype}")
     print(f"Masks shape: {masks.shape}")
     print(f"Masks max  : {masks.max()}")
     print(f"Masks min  : {masks.min()}")

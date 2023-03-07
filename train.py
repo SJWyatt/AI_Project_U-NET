@@ -57,11 +57,14 @@ class UNetTrainer(pl.LightningModule):
         # )
 
         loss = loss_ce# + loss_dice
-        self.log('train_loss', loss)
-        # self.log('train_ce_loss', loss_ce)
-        # self.log('train_dice_loss', loss_dice)
+        self.log('train_loss', loss, batch_size=self.batch_size)
+        # self.log('train_ce_loss', loss_ce, batch_size=self.batch_size)
+        # self.log('train_dice_loss', loss_dice, batch_size=self.batch_size)
 
         return loss
+    
+    def training_step_end(self, step_output):
+        return super().training_step_end(step_output)
 
     def validation_step(self, batch, batch_idx):
         inputs:Tensor = batch["ct_scan"].unsqueeze(1)
@@ -78,11 +81,19 @@ class UNetTrainer(pl.LightningModule):
         # )
 
         loss = loss_ce # + loss_dice
-        self.log('val_loss', loss)
-        # self.log('val_ce_loss', loss_ce)
-        # self.log('val_dice_loss', loss_dice)
+        # self.log('val_loss', loss, batch_size=self.batch_size)
+        # self.log('val_ce_loss', loss_ce, batch_size=self.batch_size)
+        # self.log('val_dice_loss', loss_dice, batch_size=self.batch_size)
 
         return loss
 
+    def validation_epoch_end(self, epoch_output):
+        loss = torch.stack(epoch_output).mean()
+        self.log('avg_val_loss', loss, batch_size=self.batch_size)
+        
+        return super().validation_epoch_end(epoch_output)
+
+
+
 if __name__ == "__main__":
-    cli = LightningCLI(UNetTrainer, IrcadDataloader)
+    cli = LightningCLI(UNetTrainer, IrcadDataloader, save_config_callback=None)

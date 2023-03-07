@@ -1,7 +1,14 @@
 # pytorch_lightning==1.8.1
 seed_everything: 1138
 trainer:
-  logger: true
+  logger: 
+    class_path: pytorch_lightning.loggers.WandbLogger
+    init_args:
+      name: "UNET-initial"
+      project: "AI_UNet_CTScans"
+      log_model: false
+      dir: lightning_logs
+      notes: Initial test of UNet architecture and dataset. Missing augmentations, dice loss, etc...
   enable_checkpointing: true
   enable_progress_bar: true
   max_epochs: 100
@@ -14,7 +21,8 @@ trainer:
 
   accelerator: gpu
   devices:
-   - 2
+    - 2
+    - 3
   amp_backend: apex
   precision: 32
 
@@ -29,7 +37,7 @@ model:
 data:
   dataset_dir: /ssd_data/IRCAD/3Dircadb1
   batch_size: 8
-  num_workers: 32
+  num_workers: 64
   shuffle: true
   drop_last: true
 
