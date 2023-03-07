@@ -5,4 +5,4 @@ Use U-Net model architecture to Segment CT data to label various organs.
 - [ ] Finish augmentation
 - [ ] DICE loss
 - [ ] Display masks and other logging stuff
-- [ ] Pre-training (Codo data)
+- [ ] Pre-training (COCO data)
