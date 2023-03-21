@@ -15,8 +15,9 @@ class IrcadDataloader(LightningDataModule):
                  batch_size:int=1,
                  num_workers:int=0,
                  shuffle:bool=False,
+                 augment:bool=False,
                  drop_last:bool=False,
-                 persistent_workers:bool=True,
+                 persistent_workers:bool=False,
                 ):
         super().__init__()
         self.dataset_dir = dataset_dir
@@ -26,6 +27,7 @@ class IrcadDataloader(LightningDataModule):
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.shuffle = shuffle
+        self.augment = augment
         self.drop_last = drop_last
         self.persistent_workers = persistent_workers
         
@@ -44,8 +46,8 @@ class IrcadDataloader(LightningDataModule):
             if patient_path.is_dir():
                 patient_id = patient_path.name
                 patients[patient_id] = {
-                    "ct_scans": self.load_ct_scans(patient_path, patient_id),
-                    "masks": self.load_masks(patient_path, patient_id)
+                    "ct_scans": self.load_ct_scans(patient_path),
+                    "masks": self.load_masks(patient_path)
                 }
 
         # Make sure the labels are sorted.
@@ -73,41 +75,29 @@ class IrcadDataloader(LightningDataModule):
             labels=self.labels, 
             ct_scans={patient_id: patients[patient_id]["ct_scans"] for patient_id in train_patients},
             masks={patient_id: patients[patient_id]["masks"] for patient_id in train_patients},
+            augment=self.augment,
         )
         self.val_ds = Ircadb3D(
             labels=self.labels,
             ct_scans={patient_id: patients[patient_id]["ct_scans"] for patient_id in val_patients},
-            masks={patient_id: patients[patient_id]["masks"] for patient_id in val_patients}
+            masks={patient_id: patients[patient_id]["masks"] for patient_id in val_patients},
+            augment=False, # Never augment validation data
         )
         self.test_ds = Ircadb3D(
             labels=self.labels,
             ct_scans={patient_id: patients[patient_id]["ct_scans"] for patient_id in test_patients},
-            masks={patient_id: patients[patient_id]["masks"] for patient_id in test_patients}
+            masks={patient_id: patients[patient_id]["masks"] for patient_id in test_patients},
+            augment=False, # Never augment test data
         )
 
-    def load_ct_scans(self, patient_path:Path, patient_id:str) -> None:
+    def load_ct_scans(self, patient_path:Path) -> None:
         """
         Load the CT scans for a patient.
         """
         ct_scans = []
         for ct_scan_path in sorted((patient_path / "PATIENT_DICOM").iterdir()):
             if ct_scan_path.is_file():
-                # TODO: Load the CT scan only in the dataset __getitem__ method.
-                # ct_scan = pydicom.read_file(ct_scan_path)
-                # ct_scans.append({
-                #     "pixel_data": ct_scan.pixel_array,
-                #     "metadata": {
-                #         "image_name": ct_scan_path.name,
-                #         "study_date": ct_scan.StudyDate,
-                #         "study_time": ct_scan.StudyTime,
-                #         "gender": ct_scan.PatientSex,
-                #         "pixel_spacing": ct_scan.PixelSpacing,
-                #         "slice_thickness": ct_scan.SliceThickness,
-                #         "image_number": ct_scan.InstanceNumber,
-                #         "image_position": ct_scan.ImagePositionPatient,
-                #         "image_orientation": ct_scan.ImageOrientationPatient,
-                #     }
-                # })
+                # Load the CT scan only in the dataset __getitem__ method.
                 ct_scans.append({
                     "image_name": ct_scan_path.name,
                     "ct_scan_path": ct_scan_path,
@@ -118,7 +108,7 @@ class IrcadDataloader(LightningDataModule):
         return ct_scans
 
 
-    def load_masks(self, patient_path:Path, patient_id:str) -> dict:
+    def load_masks(self, patient_path:Path) -> dict:
         """
         Load the masks for various organs.
         """
@@ -132,11 +122,9 @@ class IrcadDataloader(LightningDataModule):
                     # Get the name of the ct scan.
                     if image_name not in masks.keys():
                         masks[image_name] = {}
-                    assert organ_name not in masks[image_name], f"Duplicate organ: {organ_name} for {image_name} of patient {patient_id}"
+                    assert organ_name not in masks[image_name], f"Duplicate organ: {organ_name} for {image_name} of patient {patient_path.name}"
 
-                    # TODO: Load the mask only in the dataset __getitem__ method.
-                    # mask_data = pydicom.read_file(organ_path)
-                    # masks[image_name][organ_name] = mask_data.pixel_array
+                    # Load the mask only in the dataset __getitem__ method.
                     masks[image_name][organ_name] = {
                         "mask_path": organ_path,
                         "mask_data": []
@@ -157,6 +145,8 @@ class IrcadDataloader(LightningDataModule):
             num_workers=self.num_workers,
             shuffle=self.shuffle,
             drop_last=self.drop_last,
+            # pin_memory=self.pin_memory,
+            persistent_workers=self.persistent_workers,
         )
     
     def val_dataloader(self):
@@ -169,6 +159,8 @@ class IrcadDataloader(LightningDataModule):
             num_workers=self.num_workers,
             shuffle=False,
             drop_last=False,
+            # pin_memory=self.pin_memory,
+            persistent_workers=self.persistent_workers,
         )
     
     def test_dataloader(self):
@@ -181,12 +173,15 @@ class IrcadDataloader(LightningDataModule):
             num_workers=self.num_workers,
             shuffle=False,
             drop_last=False,
+            # pin_memory=self.pin_memory,
+            persistent_workers=self.persistent_workers,
         )
 
 
 class Ircadb3D(torch.utils.data.Dataset):
-    def __init__(self, labels:list, ct_scans:dict, masks:dict) -> None:
+    def __init__(self, labels:list, ct_scans:dict, masks:dict, augment:bool=False, verbose:bool=False) -> None:
         super().__init__()
+        self.verbose = verbose
 
         self.labels = sorted(labels)
         self.ct_scans = ct_scans
@@ -195,35 +190,7 @@ class Ircadb3D(torch.utils.data.Dataset):
         self.index_mapping = {}
         self.create_index_mapping()
 
-        self.transforms = transforms.Compose(
-            [
-                # transforms.RandomApply([
-                #     transforms.RandomChoice([
-                #         transforms.ColorJitter(),
-                #         transforms.ColorJitter(),
-                #         transforms.ColorJitter(),
-                #         transforms.ColorJitter(),
-                #     ], p=[0.25, 0.25, 0.25, 0.25]),
-                # ], p=0.25),
-                # transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)),
-                transforms.RandomApply([
-                    transforms.RandomChoice([
-                        transforms.GaussianBlur(kernel_size=3),
-                        transforms.GaussianBlur(kernel_size=5),
-                        transforms.GaussianBlur(kernel_size=7),
-                        transforms.GaussianBlur(kernel_size=9),
-                    ], p=[0.25, 0.25, 0.25, 0.25]),
-                ], p=0.25),
-                transforms.RandomApply([
-                    transforms.RandomChoice([
-                        transforms.RandomAdjustSharpness(sharpness_factor=0.5, p=1),
-                        transforms.RandomAdjustSharpness(sharpness_factor=1.5, p=1),
-                        transforms.RandomAdjustSharpness(sharpness_factor=2.5, p=1),
-                        transforms.RandomAdjustSharpness(sharpness_factor=3, p=1),
-                    ], p=[0.25, 0.25, 0.25, 0.25]),
-                ], p=0.25),
-            ]
-        )
+        self.use_augments = augment
 
     def create_index_mapping(self):
         for patient_id in sorted(self.ct_scans.keys()):
@@ -276,6 +243,7 @@ class Ircadb3D(torch.utils.data.Dataset):
                 "image_number": int(ct_scan.InstanceNumber),
                 "image_position": ct_scan.ImagePositionPatient,
                 "image_orientation": ct_scan.ImageOrientationPatient,
+                "patient_id": ct_scan_path.parent.parent.name
             })
 
         # Get the metadata for the ct scan.
@@ -283,10 +251,16 @@ class Ircadb3D(torch.utils.data.Dataset):
         image_name = metadata["image_name"]
         
         # Get the ct scan
-        ct_scan = torch.tensor(self.ct_scans[patient_id][ct_scan_index]["pixel_data"])
+        ct_scan = torch.tensor(self.ct_scans[patient_id][ct_scan_index]["pixel_data"]).float()
+
+        # Scale the ct scan to the range [0, 1].
+        max_val = ct_scan.max()
+        min_val = ct_scan.min()
+        ct_scan = (ct_scan - min_val) / (max_val - min_val)
         
         # Get the masks for all available organs.
         masks = []
+        organs = []
         for organ_name in self.labels:
             if organ_name in self.masks[patient_id][image_name]:
                 # Check if the mask is already loaded.
@@ -298,42 +272,91 @@ class Ircadb3D(torch.utils.data.Dataset):
 
                 # Load the mask for the organ.
                 mask = torch.tensor(self.masks[patient_id][image_name][organ_name]["mask_data"])
+
+                # Convert to a binary mask of 0s and 1s.
                 mask = (mask > 0.5).float()
                 
+                # Add the mask to the list of masks.
                 masks.append(mask)
+
+                # Add the organ name to the list of organs.
+                organs.append(organ_name)
             else:
                 # If the mask doesn't exist, create an empty mask.
                 masks.append(torch.zeros_like(ct_scan))
         masks = torch.stack(masks, dim=0).float()
 
-        # Normalize the ct_scan
-
-
-        ct_scan, masks = self.augment(ct_scan.unsqueeze(0), masks)
+        if self.use_augments:
+            ct_scan, masks = self.augment(ct_scan.unsqueeze(0), masks)
+            ct_scan = ct_scan.squeeze()
 
         return {
-            "ct_scan": ct_scan.squeeze(),
+            "ct_scan": ct_scan,
             "masks": masks,
+            # "organs": organs,
             "metadata": metadata,
         }
 
     def augment(self, ct_scan, masks):
-        ct_scan = self.transforms(ct_scan)
+        # ct_scan = self.transforms(ct_scan)
+
+        # Add random contrast
+        if torch.rand(1).item() < 0.25:
+            # Convert random contrast from between 0 and 1 to between 1 and 2.5 (below 1 is less contrast, above 1 is more contrast)
+            contrast = (torch.rand(1).item() * (2.5 - 1)) + 1
+            ct_scan = TF.adjust_contrast(ct_scan, contrast)
+            if self.verbose:
+                print(f"Adjusting contrast by {contrast}")
+
+        # Add random gaussian noise.
+        if torch.rand(1).item() < 0.25:
+            # Random kernel size between 1 and 9 (must be odd)
+            noise_kernel = torch.randint(0, 5, (2,)) * 2 + 1
+            noise_kernel = noise_kernel.tolist()
+
+            # Add the noise.
+            ct_scan = TF.gaussian_blur(ct_scan, noise_kernel)
+            if self.verbose:
+                print(f"Adding gaussian noise with kernel {noise_kernel}")
+
+        # Add random sharpness.
+        if torch.rand(1).item() < 0.25:
+            # Random sharpness factor between 1 and 4
+            sharpness_factor = (torch.rand(1).item() * 3) + 1
+            ct_scan = TF.adjust_sharpness(ct_scan, sharpness_factor)
+            if self.verbose:
+                print(f"Adjusting sharpness by {sharpness_factor}")
 
         # Random rotation
-        # if torch.rand(1).item() > 0.5:
-        #     angle = torch.randint(low=-5, high=5, size=(1,)).item()
-        #     ct_scan = TF.rotate(ct_scan, angle)
-        #     masks = TF.rotate(masks, angle)
+        if torch.rand(1).item() < 0.5:
+            angle = torch.randint(low=-7, high=7, size=(1,)).item()
+            ct_scan = TF.rotate(ct_scan, angle)
+            masks = TF.rotate(masks, angle)
+            if self.verbose:
+                print(f"Rotating by {angle} degrees")
 
         # Random Crop
+        # if torch.rand(1).item() < 0.25:
+        #     # Random crop size between 0.8 and 1.0
+        #     crop_size = (torch.rand(1).item() * 0.2) + 0.8
+        #     ct_scan = TF.center_crop(ct_scan, ct_scan.shape * crop_size)
+        #     masks = TF.center_crop(masks, masks.shape[-2:] * crop_size)
+        #     if self.verbose:
+        #         print(f"Randomly cropping to {crop_size}")
 
+        # Random translation
+        # if torch.rand(1).item() > 0.25:
+        #     # Random translation between -0.1 and 0.1
+        #     translation = (torch.rand(1).item() * 0.2) - 0.1
+        #     ct_scan = TF.affine(ct_scan, 0, (translation, translation), 1, 0)
+        #     masks = TF.affine(masks, 0, (translation, translation), 1, 0)
+        #     if self.verbose:
+        #         print(f"Randomly translating by {translation}")
 
-        # Random Shift
-
-
-        # Random vertical flip
-
+        # Random horizontal flip (Probably a bad idea as organs are on specific sides?)
+        # if torch.rand(1).item() > 0.1:
+        #     ct_scan = TF.hflip(ct_scan)
+        #     masks = TF.hflip(masks)
 
         return ct_scan, masks
 

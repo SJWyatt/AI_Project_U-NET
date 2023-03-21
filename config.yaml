@@ -4,14 +4,14 @@ trainer:
   logger: 
     class_path: pytorch_lightning.loggers.WandbLogger
     init_args:
-      name: "UNET-initial"
+      name: "UNET-augments-1"
       project: "AI_UNet_CTScans"
       log_model: false
       dir: lightning_logs
-      notes: Initial test of UNet architecture and dataset. Missing augmentations, dice loss, etc...
+      notes: Initial test of image augments. Missing transforms and rotations.
   enable_checkpointing: true
   enable_progress_bar: true
-  max_epochs: 100
+  max_epochs: 300
   
   auto_lr_find: true
   num_sanity_val_steps: 2
@@ -37,8 +37,9 @@ model:
 data:
   dataset_dir: /ssd_data/IRCAD/3Dircadb1
   batch_size: 8
-  num_workers: 64
+  num_workers: 8
   shuffle: true
   drop_last: true
+  persistent_workers: false
 
 ckpt_path: null

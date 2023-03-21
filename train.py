@@ -48,18 +48,33 @@ class UNetTrainer(pl.LightningModule):
 
         outs = self(inputs)
         
-        loss_ce = F.cross_entropy(outs, masks)
+        if self.num_classes > 1:
+            loss_ce = F.cross_entropy(outs, masks)
+            self.log('train_ce_loss', loss_ce, batch_size=self.batch_size)
 
-        # TODO: Also use dice loss to improve segmentation.
-        # loss_dice = dice_loss(
-        #     F.softmax(outs, dim=1).float(), 
-        #     masks.permute(0, 3, 1, 2).float()
-        # )
+            loss_dice = dice_loss(
+                F.softmax(outs, dim=1).float(), 
+                F.one_hot(masks, self.num_classes).permute(0, 3, 1, 2).float(),
+                multiclass=True
+            )
+            self.log('train_dice_loss', loss_dice, batch_size=self.batch_size)
 
-        loss = loss_ce# + loss_dice
+            loss = loss_ce + loss_dice
+        else:
+            loss_bce = F.binary_cross_entropy_with_logits(outs, masks)
+            self.log('train_bce_loss', loss_bce, batch_size=self.batch_size)
+
+            loss_dice = dice_loss(
+                F.softmax(outs, dim=1).float(),
+                masks.float(),
+                multiclass=False,
+            )
+            self.log('train_dice_loss', loss_dice, batch_size=self.batch_size)
+
+            loss = loss_bce + loss_dice #+ loss_ce
+
+        # Log the aggregated loss
         self.log('train_loss', loss, batch_size=self.batch_size)
-        # self.log('train_ce_loss', loss_ce, batch_size=self.batch_size)
-        # self.log('train_dice_loss', loss_dice, batch_size=self.batch_size)
 
         return loss
     
@@ -72,24 +87,40 @@ class UNetTrainer(pl.LightningModule):
         
         outs = self(inputs)
 
-        loss_ce = F.cross_entropy(outs, masks)
+        if self.num_classes > 1:
+            loss_ce = F.cross_entropy(outs, masks)
+            self.log('val_ce_loss', loss_ce, batch_size=self.batch_size)
 
-        # TODO: Also use dice loss to improve segmentation.
-        # loss_dice = dice_loss(
-        #     F.softmax(outs, dim=1).float(), 
-        #     masks.permute(0, 3, 1, 2).float()
-        # )
+            loss_dice = dice_loss(
+                F.softmax(outs, dim=1).float(), 
+                F.one_hot(masks, self.num_classes).permute(0, 3, 1, 2).float(),
+                multiclass=True
+            )
+            self.log('val_dice_loss', loss_dice, batch_size=self.batch_size)
 
-        loss = loss_ce # + loss_dice
+            loss = loss_ce + loss_dice
+        else:
+            loss_bce = F.binary_cross_entropy_with_logits(outs, masks)
+            self.log('val_bce_loss', loss_bce, batch_size=self.batch_size)
+
+            loss_dice = dice_loss(
+                F.softmax(outs, dim=1).float(), 
+                masks.float(),
+                multiclass=False
+            )
+            self.log('val_dice_loss', loss_dice, batch_size=self.batch_size)
+
+            loss = loss_bce + loss_dice
+
+        # Log the aggregated loss in the epoch_end function
         # self.log('val_loss', loss, batch_size=self.batch_size)
-        # self.log('val_ce_loss', loss_ce, batch_size=self.batch_size)
-        # self.log('val_dice_loss', loss_dice, batch_size=self.batch_size)
 
         return loss
 
     def validation_epoch_end(self, epoch_output):
+        # Log the average loss over the validation set
         loss = torch.stack(epoch_output).mean()
-        self.log('avg_val_loss', loss, batch_size=self.batch_size)
+        self.log('avg_val_loss', loss, batch_size=self.batch_size, sync_dist=True)
         
         return super().validation_epoch_end(epoch_output)
 
