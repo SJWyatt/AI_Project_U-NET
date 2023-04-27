@@ -1,11 +1,10 @@
 from pathlib import Path
 from datetime import datetime
-import collections
 
 import pydicom
 import torch
+from pprint import pprint
 from pytorch_lightning import LightningDataModule
-from torchvision import transforms
 import torchvision.transforms.functional as TF
 
 
@@ -180,6 +179,9 @@ class IrcadDataloader(LightningDataModule):
 
 class Ircadb3D(torch.utils.data.Dataset):
     def __init__(self, labels:list, ct_scans:dict, masks:dict, augment:bool=False, verbose:bool=False) -> None:
+        """
+        Initialization of the Ircadb3D class to hold CT scans and masks.
+        """
         super().__init__()
         self.verbose = verbose
 
@@ -193,6 +195,9 @@ class Ircadb3D(torch.utils.data.Dataset):
         self.use_augments = augment
 
     def create_index_mapping(self):
+        """
+        Creates the index maping for the ct scans based on patient ID.
+        """
         for patient_id in sorted(self.ct_scans.keys()):
             # Use a mapping to get the correct patient from an index.
             num_scans = len(self.ct_scans[patient_id])
@@ -204,7 +209,9 @@ class Ircadb3D(torch.utils.data.Dataset):
                 self.index_mapping[end_idx] = patient_id
     
     def __len__(self) -> int:
-        # The length of the dataset is the number of ct scans (for each patient).
+        """
+        The length of the dataset is the number of ct scans (for each patient).
+        """
         length = 0
         for patient_id in self.ct_scans:
             length += len(self.ct_scans[patient_id])
@@ -212,7 +219,10 @@ class Ircadb3D(torch.utils.data.Dataset):
         return length
 
     def __getitem__(self, index:int) -> dict:
-        # Get the patient id and the ct scan index.
+        """
+        Getter function for patient data based off of the ct scan index.
+        """
+        
         patient_id = None
         for idx in sorted(self.index_mapping.keys()):
             if index < idx:
@@ -293,12 +303,13 @@ class Ircadb3D(torch.utils.data.Dataset):
         return {
             "ct_scan": ct_scan,
             "masks": masks,
-            # "organs": organs,
             "metadata": metadata,
         }
 
     def augment(self, ct_scan, masks):
-        # ct_scan = self.transforms(ct_scan)
+        """
+        Performs the augmentation of the CT scan and masks based off of RNG.
+        """
 
         # Add random contrast
         if torch.rand(1).item() < 0.25:
@@ -335,29 +346,6 @@ class Ircadb3D(torch.utils.data.Dataset):
             if self.verbose:
                 print(f"Rotating by {angle} degrees")
 
-        # Random Crop
-        # if torch.rand(1).item() < 0.25:
-        #     # Random crop size between 0.8 and 1.0
-        #     crop_size = (torch.rand(1).item() * 0.2) + 0.8
-        #     ct_scan = TF.center_crop(ct_scan, ct_scan.shape * crop_size)
-        #     masks = TF.center_crop(masks, masks.shape[-2:] * crop_size)
-        #     if self.verbose:
-        #         print(f"Randomly cropping to {crop_size}")
-
-        # Random translation
-        # if torch.rand(1).item() > 0.25:
-        #     # Random translation between -0.1 and 0.1
-        #     translation = (torch.rand(1).item() * 0.2) - 0.1
-        #     ct_scan = TF.affine(ct_scan, 0, (translation, translation), 1, 0)
-        #     masks = TF.affine(masks, 0, (translation, translation), 1, 0)
-        #     if self.verbose:
-        #         print(f"Randomly translating by {translation}")
-
-        # Random horizontal flip (Probably a bad idea as organs are on specific sides?)
-        # if torch.rand(1).item() > 0.1:
-        #     ct_scan = TF.hflip(ct_scan)
-        #     masks = TF.hflip(masks)
-
         return ct_scan, masks
 
 if __name__ == "__main__":
@@ -372,7 +360,6 @@ if __name__ == "__main__":
     print(f"Validate Dataset length: {len(dataloader.val_ds)}")
     print(f"Test Dataset length    : {len(dataloader.test_ds)}")
     
-    from pprint import pprint
     print("First item:")
     batch = dataset[0]
     ct_scan:torch.Tensor = batch["ct_scan"]
@@ -387,10 +374,6 @@ if __name__ == "__main__":
     print(f"Masks shape: {masks.shape}")
     print(f"Masks max  : {masks.max()}")
     print(f"Masks min  : {masks.min()}")
-    # for i, mask in enumerate(masks):
-    #     print(f"Mask ({dataset.labels[i]}) shape: {mask.shape}")
-    #     print(f"Mask ({dataset.labels[i]}) max  : {mask.max()}")
-    #     print(f"Mask ({dataset.labels[i]}) min  : {mask.min()}")
     print("Metadata:", end=" ")
     pprint(metadata)
 

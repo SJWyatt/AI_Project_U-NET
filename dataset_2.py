@@ -1,29 +1,33 @@
-from pathlib import Path
-from datetime import datetime
-import collections
+
+# List of folders & mask number within the data with known issues:
+# 110 - 75/218
+# Got to 115 - 287/488 (i.e. 506)
+# Error on 129... (116/195)
+
+# Error in 122, 127, 128, 129, 149
+# Maybe error in 124, 125, 126
+
 import nrrd
 import numpy as np
 import glob
+from pathlib import Path
+from datetime import datetime
 
 import pydicom
 import torch
-from pytorch_lightning import LightningDataModule
-from torchvision import transforms
-import torchvision.transforms.functional as TF
-
+from pprint import pprint
 from dataset import IrcadDataloader, Ircadb3D
+import matplotlib.pyplot as plt
 
 
 class CTLungDataloader(IrcadDataloader):
     def __init__(self, *args, patient_blacklist=[122, 127, 128, 129, 149, 124, 125, 126], **kwargs):
+        """
+        Initialization of the CTLungDataLoader which loads in and procceses all of the CT scans.
+        """
         super().__init__(*args, **kwargs)
-
-        # 110 - 75/218
-        # Got to 115 - 287/488 (i.e. 506)
-        # Error on 129... (116/195)
-
-        # Error in 122, 127, 128, 129, 149
-        # Maybe error in 124, 125, 126
+        
+        # Blacklist is due to improper masks on truth data
         self.patient_blacklist = patient_blacklist
     
     def setup(self, stage:str=None) -> None:
@@ -39,10 +43,9 @@ class CTLungDataloader(IrcadDataloader):
             if mask_file.suffix != ".nrrd":
                 continue
 
-            # print(f"Loading patient {mask_file.stem}")
             patient_id = mask_file.stem
 
-            # Check the patient id is not on our 'blacklist'.
+            # Check the patient id is not on our 'blacklist'
             if int(patient_id) in self.patient_blacklist:
                 print(f"Skipping patient {patient_id}.")
                 continue
@@ -79,13 +82,10 @@ class CTLungDataloader(IrcadDataloader):
                             "image_name": ct_scan_path.name,
                         }
                     })
-                    # patients[patient_id]["masks"].append(mask)
 
         # Sort the patient id's
         patient_keys = sorted(patients.keys())
 
-        # TODO: Make sure the same patients are not split into both train and val.
-        # 
 
         # Split in train, val, and test.
         num_patients = len(patient_keys)
@@ -153,15 +153,21 @@ class CTLungDataloader(IrcadDataloader):
             num_workers=self.num_workers,
             shuffle=False,
             drop_last=False,
-            # pin_memory=self.pin_memory,
             persistent_workers=self.persistent_workers,
         )
 
 class CTLung(Ircadb3D):
     def __init__(self, ct_scans:dict, augment:bool=False, verbose:bool=False):
+        """
+        Initialization of the CTLung which loads procceses a single CT scan.
+        """
         super().__init__([], ct_scans, {}, augment, verbose)
 
     def create_index_mapping(self):
+        """
+        Creates an easier way to gather data from a specific patient via
+        an index value.
+        """
         for patient_id in sorted(self.ct_scans.keys()):
             # Use a mapping to get the correct patient from an index.
             num_scans = len(self.ct_scans[patient_id])
@@ -174,7 +180,9 @@ class CTLung(Ircadb3D):
                     self.index_mapping[end_idx] = patient_id
 
     def __getitem__(self, index: int):
-        # Get the patient id and the ct scan index.
+        """
+        Get the patient id and the ct scan index.
+        """
         patient_id = None
         for idx in sorted(self.index_mapping.keys()):
             if index < idx:
@@ -186,7 +194,6 @@ class CTLung(Ircadb3D):
         assert ct_scan_index >= 0 and ct_scan_index < len(self.ct_scans[patient_id]), f"Invalid ct scan index: {ct_scan_index} for patient {patient_id} - (index: {index}, idx: {idx}, len: {len(self.ct_scans[patient_id])})"
 
         # Load the ct scan from the filesystem (if not already loaded).
-        # mask_path:Path = self.masks[patient_id][ct_scan_index]["mask_path"]
         if len(self.ct_scans[patient_id][ct_scan_index]["pixel_data"]) == 0:
             ct_scan_path:Path = self.ct_scans[patient_id][ct_scan_index]["ct_scan_path"]
             ct_scan = pydicom.read_file(ct_scan_path)
@@ -209,7 +216,7 @@ class CTLung(Ircadb3D):
                 "image_orientation": ct_scan.ImageOrientationPatient,
             })
 
-        # Get the metadata for the ct scan.
+        # Get the metadata for the ct scan
         metadata = self.ct_scans[patient_id][ct_scan_index]["metadata"]
         
         # Get the ct scan
@@ -229,39 +236,35 @@ class CTLung(Ircadb3D):
             ct_scan, mask = self.augment(ct_scan.unsqueeze(0), mask.unsqueeze(0))
             ct_scan = ct_scan.squeeze()
             mask = mask.squeeze()
+            
+        scan_data = {"ct_scan": ct_scan,
+                   "masks": mask,
+                   "metadata": metadata}
 
-        return {
-            "ct_scan": ct_scan,
-            "masks": mask,
-            # "organs": organs,
-            "metadata": metadata,
-        }
+        return scan_data
 
 if __name__ == "__main__":
-    import matplotlib.pyplot as plt
-
     # Test that the dataset loads correctly.
     dataset_dir = Path("/ssd_data/CT_Lung/")
     dataloader = CTLungDataloader(dataset_dir, num_workers=0, batch_size=1, shuffle=False, drop_last=False)
     dataloader.setup("fit")
 
-    # dataset = dataloader.train_dataloader()
+    # Output general dataset size information    
     dataset = dataloader.train_ds
     print(f"Train Dataset length   : {len(dataset)}")
     print(f"Validate Dataset length: {len(dataloader.val_ds)}")
     print(f"Test Dataset length    : {len(dataloader.test_ds)}")
-    
-    from pprint import pprint
     print("Index Mapping:")
     pprint(dataset.index_mapping)
 
-
+    # Sample the first item in the output
     print("First item:")
     batch = dataset[0]
     ct_scan:torch.Tensor = batch["ct_scan"]
     masks:torch.Tensor = batch["masks"]
     metadata = batch["metadata"]
-
+    
+    # Print out all of the results
     print(f"CT scan dtype: {ct_scan.dtype}")
     print(f"CT scan shape: {ct_scan.shape}")
     print(f"CT scan max  : {ct_scan.max()}")
@@ -270,10 +273,6 @@ if __name__ == "__main__":
     print(f"Masks shape: {masks.shape}")
     print(f"Masks max  : {masks.max()}")
     print(f"Masks min  : {masks.min()}")
-    # for i, mask in enumerate(masks):
-    #     print(f"Mask ({dataset.labels[i]}) shape: {mask.shape}")
-    #     print(f"Mask ({dataset.labels[i]}) max  : {mask.max()}")
-    #     print(f"Mask ({dataset.labels[i]}) min  : {mask.min()}")
     print("Metadata:")
     pprint(metadata)
 
@@ -284,7 +283,8 @@ if __name__ == "__main__":
         ct_scan:torch.Tensor = batch["ct_scan"]
         masks:torch.Tensor = batch["masks"]
         metadata = batch["metadata"]
-
+        
+        # Skipping patients we already looked at
         if metadata['patient_num'] in patients_checked:
             continue
 

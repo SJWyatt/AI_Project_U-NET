@@ -26,7 +26,9 @@ class DoubleConv(nn.Module):
 
 
 class Down(nn.Module):
-    """Downscaling with maxpool then double conv"""
+    """
+    Runs the downscaling with maxpool and double convolution for the U-Net.
+    """
 
     def __init__(self, in_channels, out_channels):
         super().__init__()
@@ -40,7 +42,9 @@ class Down(nn.Module):
 
 
 class Up(nn.Module):
-    """Upscaling then double conv"""
+    """
+    Runs the upscaling and double convolution for the U-Net.
+    """
 
     def __init__(self, in_channels, out_channels, bilinear=True):
         super().__init__()
@@ -78,6 +82,9 @@ class OutConv(nn.Module):
 
 
 class UNet(nn.Module):
+    """
+    Primary U-Net class running all up and down convolutions.
+    """
     def __init__(self, n_channels, n_classes, bilinear=False):
         super(UNet, self).__init__()
         self.n_channels = n_channels

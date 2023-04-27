@@ -11,26 +11,29 @@ from dataset import IrcadDataloader
 
 
 def calculate_iou(pred_masks:Tensor, gt_masks:Tensor, smooth=1):
+    """
+    Calculates the intersection over union (IoU) loss of the predicted mask.
+    """
     # Helpful article: https://towardsdatascience.com/metrics-to-evaluate-your-semantic-segmentation-model-6bcb99639aa2
 
     # Calculate the intersection over union for the mask and the prediction
-    # pred_masks = (F.softmax(pred_masks, dim=1) > torch.tensor(0.5)).float()
-    # intersection = (pred_masks & gt_masks).sum()
-    # union = (pred_masks | gt_masks).sum()
-
-    # return intersection / union
-
     intersection = torch.sum(torch.abs(gt_masks * pred_masks), dim=[1,2])
     union = torch.sum(gt_masks, [1,2]) + torch.sum(pred_masks, [1,2]) - intersection
     return torch.mean((intersection + smooth) / (union + smooth), dim=0)
 
 def calculate_dice(pred_masks:Tensor, gt_masks:Tensor, smooth=1):
+    """
+    Calculates the DICE loss of the predicted mask.
+    """
     intersection = torch.sum(torch.abs(gt_masks * pred_masks), dim=[1,2])
     union = torch.sum(gt_masks, [1,2]) + torch.sum(pred_masks, [1,2])
 
     return torch.mean((2. * intersection + smooth) / (union + smooth), dim=0)
 
 def calculate_pixel_accuracy(pred_masks:Tensor, gt_masks:Tensor):
+    """
+    Calculates the pixel accuracy loss of the predicted mask.
+    """
     return torch.sum((pred_masks.round() == gt_masks), [1, 2]).float() / (gt_masks.shape[1] * gt_masks.shape[2])
 
 class UNetTrainer(pl.LightningModule):
@@ -49,6 +52,10 @@ class UNetTrainer(pl.LightningModule):
         # Logging Parameters
         verbose:bool=False
     ):
+        """
+        Initializes of the UNetTrainer class which runs all training methods 
+        for the U-Net model.
+        """
         super().__init__()
         self.verbose = verbose
 
@@ -59,23 +66,36 @@ class UNetTrainer(pl.LightningModule):
         self.model = UNet(n_channels=num_channels, n_classes=self.num_classes, bilinear=bilinear)
 
     def configure_optimizers(self):
+        """
+        Initializes the optimizer with proper parameters.
+        """
         optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
 
         return optimizer
 
-    def forward(self, x:Tensor) -> Tensor:
-        return self.model(x)
+    def forward(self, tensor:Tensor) -> Tensor:
+        """
+        Computes the output tensors from the input tensor.
+        """
+        return self.model(tensor)
 
     def training_step(self, batch, batch_idx):
+        """
+        Trains the model and calculates/logs all necessary losses to show 
+        improvement.
+        """
         inputs:Tensor = batch["ct_scan"].unsqueeze(1)
         masks:Tensor = batch["masks"]
 
         outs:Tensor = self(inputs)
         
         if self.num_classes > 1:
+            
+            # Calculate cross entropy loss
             loss_ce = F.cross_entropy(outs, masks)
             self.log('train_ce_loss', loss_ce, batch_size=self.batch_size, sync_dist=True)
-
+            
+            # Calculate DICE loss
             loss_dice = dice_loss(
                 F.softmax(outs, dim=1).float(), 
                 F.one_hot(masks, self.num_classes).permute(0, 3, 1, 2).float(),
@@ -87,10 +107,12 @@ class UNetTrainer(pl.LightningModule):
         else:
             outs = outs.squeeze(1)
             out_sigmoid = torch.sigmoid(outs)
-
+            
+            # Calculate binary cross entropy loss
             loss_bce = F.binary_cross_entropy_with_logits(outs, masks)
             self.log('train_bce_loss', loss_bce, batch_size=self.batch_size, sync_dist=True)
-
+            
+            # Calculate DICE loss
             loss_dice = dice_loss(
                 out_sigmoid,
                 masks.float(),
@@ -98,15 +120,17 @@ class UNetTrainer(pl.LightningModule):
             )
             self.log('train_dice_loss', loss_dice, batch_size=self.batch_size, sync_dist=True)
 
-            loss = loss_bce + loss_dice #+ loss_ce
-
+            loss = loss_bce + loss_dice
+            
+            # Calculates IoU loss
             iou = calculate_iou(out_sigmoid, masks.float())
             self.log('train_iou', iou, batch_size=self.batch_size, sync_dist=True)
-
+            
+            # Calculates DICE loss
             dice = calculate_dice(out_sigmoid, masks.float())
             self.log('train_dice', dice, batch_size=self.batch_size, sync_dist=True)
 
-            # Report pixel accuracy
+            # Calculates pixel accuracy
             acc = calculate_pixel_accuracy(out_sigmoid, masks.float()).sum() / self.batch_size
             self.log('train_acc', acc, batch_size=self.batch_size, sync_dist=True)
 
@@ -114,11 +138,12 @@ class UNetTrainer(pl.LightningModule):
         self.log('train_loss', loss, batch_size=self.batch_size, sync_dist=True)
 
         return loss
-    
-    def training_step_end(self, step_output):
-        return super().training_step_end(step_output)
 
     def validation_step(self, batch, batch_idx):
+        """
+        Validation step for the model and calculates/logs all necessary losses 
+        to show improvement.
+        """
         inputs:Tensor = batch["ct_scan"].unsqueeze(1)
         masks:Tensor = batch["masks"]
         
@@ -126,9 +151,11 @@ class UNetTrainer(pl.LightningModule):
 
         ret_data = {}
         if self.num_classes > 1:
+            # Calculate cross entropy loss
             loss_ce = F.cross_entropy(outs, masks)
             self.log('val_ce_loss', loss_ce, batch_size=self.batch_size, sync_dist=True)
-
+            
+            # Calculates DICE loss
             loss_dice = dice_loss(
                 F.softmax(outs, dim=1).float(), 
                 F.one_hot(masks, self.num_classes).permute(0, 3, 1, 2).float(),
@@ -141,9 +168,11 @@ class UNetTrainer(pl.LightningModule):
             outs = outs.squeeze(1)
             out_sigmoid = torch.sigmoid(outs)
 
+            # Calculate binary cross entropy loss
             loss_bce = F.binary_cross_entropy_with_logits(outs, masks)
             self.log('val_bce_loss', loss_bce, batch_size=self.batch_size, sync_dist=True)
-
+            
+            # Calculates DICE loss
             loss_dice = dice_loss(
                 out_sigmoid, 
                 masks.float(), 
@@ -155,7 +184,8 @@ class UNetTrainer(pl.LightningModule):
             ret_data['iou'] = calculate_iou(out_sigmoid, masks)
             ret_data['dice'] = calculate_dice(out_sigmoid, masks)
             ret_data['acc'] = calculate_pixel_accuracy(out_sigmoid, masks).mean()
-
+            
+        # Outputs visualization to WandB for the first index of the batch
         if batch_idx == 0:
             images = []
             for img, pred, true in zip(inputs, outs, masks):
@@ -181,14 +211,14 @@ class UNetTrainer(pl.LightningModule):
                     })
                 )
             self.logger.experiment.log({"examples": images, "epoch": self.current_epoch, "batch": batch_idx})
-            # self.log("examples", images, batch_size=self.batch_size, sync_dist=True)
-
-        # Log the aggregated loss in the epoch_end function
-        # self.log('val_loss', loss, batch_size=self.batch_size, sync_dist=True)
 
         return ret_data
 
     def validation_epoch_end(self, epoch_output):
+        """
+        Overwrite of validation_epoch_end to log the loss of the validation 
+        set before completion.
+        """
         # Log the average loss over the validation set
         loss = torch.stack([out['loss'] for out in epoch_output]).mean()
         self.log('avg_val_loss', loss, batch_size=self.batch_size, sync_dist=True)
